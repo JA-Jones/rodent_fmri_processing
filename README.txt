@@ -32,7 +32,6 @@ Parent folder with script, skull-stripped template image
 Subject folder as outlined by 'datanames'/scan4 with corresponding functional image and skullstripped structural image
 Run script
 
-If you have any questions the please email jaj58@cam.ac.uk
 
 
 
