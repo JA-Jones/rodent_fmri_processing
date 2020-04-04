@@ -1,0 +1,122 @@
+#!/bin/bash 
+# script for the pre-processing & registration of rat functional FMRI data
+# imperative to check data prior to input for ghosting/aliasing artifacts etc.
+# prior to extraction all images have been manually reorientated to a common template using SPMmouse (bulk manual registration tool) in SPM8
+# voxel size x10 to make rat voxel size more in align with that of human for registration purposes - up to registration this isn''t an issue
+# requires the installation of FSL & AFNI
+# script run from parent folder with files (based on datanames - and sub-folder 'scan4')
+# 'func_mask' - the combination of c1/c2/c3 of a spatially aligned structural image processed through a segmentation pipeline (SPM) - binarised
+# 'func_mask' - an average of all masks from the above process for all subjects
+# special thanks to P.Zhukovsky & J.Grandjean for the implementation of this script
+
+
+datanames="
+1001
+1002
+1003"
+
+for i in $datanames
+
+do
+
+# split the file into its volumes and average the echos (an example used here but do for all split volumes) - other methods available 
+
+cd $i/Scan4
+
+fslsplit func.nii
+
+fslmerge -t rest_e1.nii.gz vol0000.nii.gz vol0003.nii.gz vol0006.nii.gz vol0009.nii.gz vol0012.nii.gz vol0015.nii.gz vol0018.nii.gz vol0021.nii.gz vol0024.nii.gz vol0027.nii.gz vol0030.nii.gz vol0033.nii.gz vol0036.nii.gz vol0039.nii.gz vol0042.nii.gz vol0045.nii.gz vol0048.nii.gz vol0051.nii.gz vol0054.nii.gz vol0057.nii.gz vol0060.nii.gz vol0063.nii.gz vol0066.nii.gz vol0069.nii.gz vol0072.nii.gz vol0075.nii.gz vol0078.nii.gz vol0081.nii.gz vol0084.nii.gz vol0087.nii.gz vol0090.nii.gz vol0093.nii.gz vol0096.nii.gz vol0099.nii.gz vol0102.nii.gz 
+
+fslmerge -t rest_e2.nii.gz vol0001.nii.gz vol0004.nii.gz vol0007.nii.gz vol0010.nii.gz vol0013.nii.gz vol0016.nii.gz vol0019.nii.gz vol0022.nii.gz vol0025.nii.gz vol0028.nii.gz vol0031.nii.gz vol0034.nii.gz vol0037.nii.gz vol0040.nii.gz vol0043.nii.gz vol0046.nii.gz vol0049.nii.gz vol0052.nii.gz vol0055.nii.gz vol0058.nii.gz vol0061.nii.gz vol0064.nii.gz vol0067.nii.gz vol0070.nii.gz vol0073.nii.gz vol0076.nii.gz vol0079.nii.gz vol0082.nii.gz vol0085.nii.gz vol0088.nii.gz vol0091.nii.gz vol0094.nii.gz vol0097.nii.gz vol0100.nii.gz 
+
+fslmerge -t rest_e3.nii.gz vol0002.nii.gz vol0005.nii.gz vol0008.nii.gz vol0011.nii.gz vol0014.nii.gz vol0017.nii.gz vol0020.nii.gz vol0023.nii.gz vol0026.nii.gz vol0029.nii.gz vol0032.nii.gz vol0035.nii.gz vol0038.nii.gz vol0041.nii.gz vol0044.nii.gz vol0047.nii.gz vol0050.nii.gz vol0053.nii.gz vol0056.nii.gz vol0059.nii.gz vol0062.nii.gz vol0065.nii.gz vol0068.nii.gz vol0071.nii.gz vol0074.nii.gz vol0077.nii.gz vol0080.nii.gz vol0083.nii.gz vol0086.nii.gz vol0089.nii.gz vol0092.nii.gz vol0095.nii.gz vol0098.nii.gz vol0101.nii.gz 
+# Once merged, remove all the files starting with 'vol'
+
+rm vol*
+
+# Combine images using AFNI
+
+3dcalc -a rest_e1.nii.gz -b rest_e2.nii.gz -c rest_e3.nii.gz -expr '(a+b+c)' -prefix comb_func
+rm rest_e1.nii.gz
+rm rest_e2.nii.gz
+rm rest_e3.nii.gz
+
+# Convert back to NIFTI
+#change file name
+3dAFNItoNIFTI comb_func+tlrc.BRIK
+rm comb_func+tlrc.BRIK comb_func+tlrc.HEAD
+
+# remove first 5 volumes
+fslroi comb_func.nii 5 440
+
+# skull strip functional image 
+fslmaths func_reg.nii.gz -mas ../masks/func_mask.nii.gz func_masked.nii.gz
+
+# extract ROI time-series for initial comparison & health check
+fslmeants func_masked.nii.gz time_series_check_{i}
+
+# depiking 
+3dDespike -NEW -q -prefix preproc_despike.nii.gz func_masked.nii.gz 
+
+# motion correction
+3dvolreg -verbose -zpad 1 -linear -prefix preproc_mcf.nii.gz -1Dfile motion.1D -maxdisp1D maxdisp.1D preproc_despike.nii.gz
+
+# signal to noise ratio
+fslmaths preproc_mcf.nii.gz -Tmean preproc_mean_mcf
+fslmaths preproc_mcf.nii.gz -Tstd preproc_std_mcf
+fslmaths preproc_mean_mcf.nii.gz -div preproc_std_mcf.nii.gz preproc_tSNR
+fslstats preproc_tSNR.nii.gz -M  >> t_snr_{i].txt
+
+# regress out  motion correction variables
+fsl_regfilt -i preproc_mcf.nii.gz -d tmp -o preproc_filt.nii.gz --vn -f "1,2,3,4,5,6" -m ../masks/func_mask.nii.gz -v
+
+# smooth 
+3dBlurInMask -input preproc_mcf.nii.gz -FWHM 4.5 -mask ../masks/func_mask.nii.gz -prefix preproc_smooth.nii.gz
+
+# bandpass 
+3dBandpass -mask ../masks/func_mask.nii.gz -prefix preproc_tempfilt.nii.gz 0.01 0.1 preproc_smooth.nii.gz
+
+fslmaths preproc_smooth.nii.gz -Tmean smooth_mean.nii.gz
+fslmaths preproc_tempfilt.nii.gz -add smooth_mean.nii.gz filt_func_${i}
+
+rm func_masked.nii.gz
+rm preproc_despike.nii.gz
+rm preproc_mcf.nii.gz
+rm preproc_mean_mcf
+rm preproc_stf_mcf
+rm preproc_tSNR
+rm preproc_filt.nii.gz
+rm preproc_smooth.nii.gz
+rm preproc_smooth.nii.gz
+rm smooth_mean.nii.gz
+rm preproc_tempfilt.nii.gz
+
+wait
+
+##### Registration #####
+# Registration based on FLIRT/FNIRT
+# Subjects voxel size will need to be x10 prior to the use of FLIRT/FNIRT
+# comb_mt_bet is a skull stripped structural (MT) image of the subject
+# temp.nii is a skullstripped version of a high-resolution structural template 
+# must make sure that all these images are in alignment (can do visually FSLeyes/SPMmouse)
+
+#functional to structural
+ 
+flirt -in filt_func_${i}.nii.gz -ref comb_mt_bet.nii -omat func2struct.mat -out func_in_struct -dof 6
+
+# initial registration of structural to template
+flirt -in comb_mt_bet.nii -ref ../../temp.nii -out struct_in_temp -omat struct2temp.mat -dof 12
+
+# non-linear warp of structural to template
+fnirt --ref=../../temp.nii --in=comb_mt_bet.nii --aff=struct2temp.mat --subsamp=4,2,1,1 --infwhm=2,1,0,0 --reffwhm=1,0,0,0 -v --lambda=200,75,40,20 
+
+applywarp --ref=../../temp.nii --in=filt_func_${i}.nii.gz --out=func_in_temp --warp=comb_mt_bet_warpcoef.nii.gz --premat=func2struct.mat
+
+applywarp --ref=../../temp.nii --in=func_mask.nii --out=func_mask_fnirt --warp=comb_mt_bet_warpcoef.nii.gz --premat=func2struct.mat
+
+done
+
+
+
+
+
